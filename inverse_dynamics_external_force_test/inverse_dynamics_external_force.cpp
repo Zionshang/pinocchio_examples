@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <string>
+#include <chrono>
 #include "Eigen/Core"
 
 using namespace std;
@@ -14,7 +15,6 @@ using namespace std;
 using Vec3 = Eigen::Matrix<double, 3, 1>;
 using VecNq = Eigen::Matrix<double, 19, 1>;
 using VecNv = Eigen::Matrix<double, 18, 1>;
-using VecNj = Eigen::Matrix<double, 12, 1>;
 
 class PinocchioDynamics
 {
@@ -22,10 +22,10 @@ public:
     PinocchioDynamics(string urdf_filename);
 
     void PrintModelTree();
-    VecNj InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
+    VecNv InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
                                 const VecNv &a, const vector<Vec3> &f_ext);
     VecNv forwardDynamicsByEom(const VecNq &q, const VecNv &v,
-                               const VecNj &tau, const vector<Vec3> &f_ext);
+                               const VecNv &tau, const vector<Vec3> &f_ext);
 
     const int GetNq() const { return nq_; }
     const int GetNv() const { return nv_; }
@@ -48,12 +48,12 @@ PinocchioDynamics::PinocchioDynamics(string urdf_filename)
 
     vector<string> foot_names = {"LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"};
     vector<string> foot_parent_joint_names = {"thigh_fl_to_knee_fl_j", "thigh_fr_to_knee_fr_j",
-                                              "thigh_hl_to_knee_hl_j", "thigh_hl_to_knee_hr_j"};
+                                              "thigh_hl_to_knee_hl_j", "thigh_hr_to_knee_hr_j"};
 
     for (int i = 0; i < 4; i++)
     {
         id_feet_[i] = model_.getFrameId(foot_names[i], pinocchio::BODY);
-        id_feet_parentjoint_[i] = model_.getFrameId(foot_names[i], pinocchio::JOINT);
+        id_feet_parentjoint_[i] = model_.getJointId(foot_parent_joint_names[i]);
     }
 }
 
@@ -71,7 +71,7 @@ void PinocchioDynamics::PrintModelTree()
         std::cout << std::setw(24) << std::left << frame_id << ": " << model_.frames[frame_id].name << std::endl;
 }
 
-VecNj PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
+VecNv PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
                                                const VecNv &a, const vector<Vec3> &f_ext)
 {
     pinocchio::forwardKinematics(model_, data_, q);
@@ -82,15 +82,13 @@ VecNj PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
     for (int i = 0; i < 4; i++)
         f_ext_footlocal[i] = data_.oMf[id_feet_[i]].rotation().transpose() * f_ext[i];
 
-    // for (int joint_id = 0; joint_id < model_.njoints; joint_id++)
     pinocchio::container::aligned_vector<pinocchio::Force> f_6d_ext_jointlocal(model_.njoints, pinocchio::Force::Zero());
-
     for (int i = 0; i < 4; i++)
     {
         // f_6d_ext_local is expressed in foot local frame, we should transform it to joint local frame
-        const pinocchio::Force f_6d_ext_footlocal = pinocchio::Force(f_ext_footlocal[i], Eigen::Vector3d::Zero());
-        // TODO: test the iMf
-        f_6d_ext_jointlocal[id_feet_parentjoint_[i]] = data_.iMf[id_feet_parentjoint_[i]].actInv(f_6d_ext_footlocal);
+        const pinocchio::Force f_6d_ext_footlocal(f_ext_footlocal[i], Eigen::Vector3d::Zero());
+        const pinocchio::SE3 jMf = data_.oMi[id_feet_parentjoint_[i]].inverse() * data_.oMf[id_feet_[i]];
+        f_6d_ext_jointlocal[id_feet_parentjoint_[i]] = jMf.act(f_6d_ext_footlocal);
     }
 
     pinocchio::rnea(model_, data_, q, v, a, f_6d_ext_jointlocal);
@@ -99,7 +97,7 @@ VecNj PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
 }
 
 VecNv PinocchioDynamics::forwardDynamicsByEom(const VecNq &q, const VecNv &v,
-                                              const VecNj &tau, const vector<Vec3> &f_ext)
+                                              const VecNv &tau, const vector<Vec3> &f_ext)
 {
     // calculate contact jacobian
     std::vector<Eigen::Matrix<double, 6, 18>> J(4);
@@ -118,13 +116,8 @@ VecNv PinocchioDynamics::forwardDynamicsByEom(const VecNq &q, const VecNv &v,
     M.triangularView<Eigen::Lower>() = M.triangularView<Eigen::Upper>().transpose();
     C = data_.nle;
 
-    // calculate a by a = M.inv (S * tau - C + J' * f_ext)
-    // Eigen::MatrixXd S = Eigen::MatrixXd::Zero(nv_, 12);
-    // S.bottomRows(12) = Eigen::MatrixXd::Identity(12, 12);
-    // VecNv a = S * tau - C;
-    VecNv S_times_tau;
-    S_times_tau << Eigen::VectorXd::Zero(6), tau;
-    VecNv a = S_times_tau - C;
+    // calculate a by a = M.inv (tau - C + J' * f_ext)
+    VecNv a = tau - C;
     for (int i = 0; i < 4; i++)
         a += J[i].topRows(3).transpose() * f_ext[i]; // only consider the linear part of jacobian
 
@@ -139,12 +132,12 @@ int main()
 
     int nv = pin_dyn.GetNv();
     VecNq q;
-    q << 0.0, 0.0, 0.235,
-        0.0, 0.0, 0.0, 1.0,
-        0.0, 0.8, -1.6,
+    q << 0.0, 0.0, 0.29, 0.0, 0.0, 0.0, 1.0,
         0.0, -0.8, 1.6,
-        0.0, 0.8, -1.6,
+        0.0, -0.8, 1.6,
+        0.0, -0.8, 1.6,
         0.0, -0.8, 1.6;
+
     VecNv v = Eigen::MatrixXd::Random(nv, 1);
     VecNv a = Eigen::MatrixXd::Random(nv, 1);
     cout << "a from given:\t" << a.transpose() << std::endl;
@@ -152,12 +145,18 @@ int main()
     Vec3 fext0(10, -20, 100), fext1(-10, 20, 120), fext2(5, -5, 90), fext3(-10, -10, 120);
     vector<Vec3> f_ext = {fext0, fext1, fext2, fext3};
 
-    VecNj tau = pin_dyn.InverseDynamicsByRnea(q, v, a, f_ext);
+    auto start = std::chrono::high_resolution_clock::now();
+    VecNv tau = pin_dyn.InverseDynamicsByRnea(q, v, a, f_ext);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "Execution time: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
     cout << "tau from RNEA:\t" << tau.transpose() << std::endl;
 
+    start = std::chrono::high_resolution_clock::now();
     VecNv a2 = pin_dyn.forwardDynamicsByEom(q, v, tau, f_ext);
-
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Execution time: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
     cout << "a from EOM:\t" << a2.transpose() << std::endl;
 
+    cout << "errors of a:\t" << (a - a2).squaredNorm() << std::endl;
     return 0;
 }
