@@ -36,7 +36,7 @@ private:
 
     int nq_, nv_;
     int id_feet_[4];
-    int id_feet_parentjoint_[4];
+    int id_joint_[4];
 };
 
 PinocchioDynamics::PinocchioDynamics(string urdf_filename)
@@ -53,7 +53,7 @@ PinocchioDynamics::PinocchioDynamics(string urdf_filename)
     for (int i = 0; i < 4; i++)
     {
         id_feet_[i] = model_.getFrameId(foot_names[i], pinocchio::BODY);
-        id_feet_parentjoint_[i] = model_.getJointId(foot_parent_joint_names[i]);
+        id_joint_[i] = model_.getJointId(foot_parent_joint_names[i]);
     }
 }
 
@@ -62,11 +62,11 @@ void PinocchioDynamics::PrintModelTree()
     using pinocchio::FrameIndex;
     using pinocchio::JointIndex;
 
-    std::cout << " -------------index and names in joint------------- " << std::endl;
+    std::cout << " -------------index and names of joint------------- " << std::endl;
     for (JointIndex joint_id = 0; joint_id < (JointIndex)model_.njoints; ++joint_id)
         std::cout << std::setw(24) << std::left << joint_id << ": " << model_.names[joint_id] << std::endl;
 
-    std::cout << " -------------index and names in frame------------- " << std::endl;
+    std::cout << " -------------index and names of frame------------- " << std::endl;
     for (FrameIndex frame_id = 0; frame_id < (FrameIndex)model_.nframes; ++frame_id)
         std::cout << std::setw(24) << std::left << frame_id << ": " << model_.frames[frame_id].name << std::endl;
 }
@@ -77,21 +77,28 @@ VecNv PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
     pinocchio::forwardKinematics(model_, data_, q);
     pinocchio::updateFramePlacements(model_, data_);
 
-    // transform the f_ext from world frame to foot local frame
-    vector<Vec3> f_ext_footlocal(4);
-    for (int i = 0; i < 4; i++)
-        f_ext_footlocal[i] = data_.oMf[id_feet_[i]].rotation().transpose() * f_ext[i];
-
-    pinocchio::container::aligned_vector<pinocchio::Force> f_6d_ext_jointlocal(model_.njoints, pinocchio::Force::Zero());
+    // transform the foot f_ext from world frame to local frame
+    vector<pinocchio::Force> f_foot_W(4), f_foot_L(4);
+    pinocchio::SE3 X_wf_rotation; // transformation of foot relative to world, but only consider rotation part.
     for (int i = 0; i < 4; i++)
     {
-        // f_6d_ext_local is expressed in foot local frame, we should transform it to joint local frame
-        const pinocchio::Force f_6d_ext_footlocal(f_ext_footlocal[i], Eigen::Vector3d::Zero());
-        const pinocchio::SE3 jMf = data_.oMi[id_feet_parentjoint_[i]].inverse() * data_.oMf[id_feet_[i]];
-        f_6d_ext_jointlocal[id_feet_parentjoint_[i]] = jMf.act(f_6d_ext_footlocal);
+        f_foot_W[i] = pinocchio::Force(f_ext[i], Eigen::Vector3d::Zero());
+        X_wf_rotation.rotation(data_.oMf[id_feet_[i]].rotation());
+        X_wf_rotation.translation(Eigen::Vector3d::Zero());
+        f_foot_L[i] = X_wf_rotation.actInv(f_ext[i]);
     }
 
-    pinocchio::rnea(model_, data_, q, v, a, f_6d_ext_jointlocal);
+    // all joints force, expressed in local frame
+    pinocchio::container::aligned_vector<pinocchio::Force> f_joints_L(model_.njoints, pinocchio::Force::Zero());
+
+    for (int i = 0; i < 4; i++)
+    {
+        // transformation of foot relative to joint
+        const pinocchio::SE3 X_jf_ = data_.oMi[id_joint_[i]].inverse() * data_.oMf[id_feet_[i]];
+        f_joints_L[id_joint_[i]] = X_jf_.act(f_foot_L[i]);
+    }
+
+    pinocchio::rnea(model_, data_, q, v, a, f_joints_L);
 
     return data_.tau;
 }
@@ -126,7 +133,7 @@ VecNv PinocchioDynamics::forwardDynamicsByEom(const VecNq &q, const VecNv &v,
 
 int main()
 {
-    std::string urdf_filename = "/home/zishang/Cpp_workspace/pinocchio_examples/inverse_dynamics_external_force_test/robot/mini_cheetah_mesh_v2.urdf";
+    std::string urdf_filename = "/home/zishang/Cpp_workspace/pinocchio_examples/robot/mini_cheetah_mesh_v2.urdf";
     PinocchioDynamics pin_dyn(urdf_filename);
     pin_dyn.PrintModelTree();
 

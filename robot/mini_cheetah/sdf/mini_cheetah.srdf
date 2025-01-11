@@ -1,0 +1,15 @@
+<?xml version="1.0" ?>
+<robot name="mini_cheetah">
+    <disable_collisions link1="body" link2="ground" reason="Never" />
+    <disable_collisions link1="body" link2="LF_FOOT" reason="Never" />
+    <disable_collisions link1="body" link2="RF_FOOT" reason="Never" />
+    <disable_collisions link1="body" link2="LH_FOOT" reason="Never" />
+    <disable_collisions link1="body" link2="RH_FOOT" reason="Never" />
+
+    <disable_collisions link1="LF_FOOT" link2="RF_FOOT" reason="Never" />
+    <disable_collisions link1="LF_FOOT" link2="LH_FOOT" reason="Never" />
+    <disable_collisions link1="LF_FOOT" link2="RH_FOOT" reason="Never" />
+    <disable_collisions link1="RF_FOOT" link2="LH_FOOT" reason="Never" />
+    <disable_collisions link1="RF_FOOT" link2="RH_FOOT" reason="Never" />
+    <disable_collisions link1="LH_FOOT" link2="RH_FOOT" reason="Never" />
+</robot>
