@@ -14,3 +14,8 @@ add_executable(manifold_cppad manifold_cppad/manifold_cppad.cpp)
 target_link_libraries(manifold_cppad
     pinocchio::pinocchio
     example-robot-data::example-robot-data)
+
+add_executable(print_frame_information print_frame_information/print_frame_information.cpp)
+target_link_libraries(print_frame_information
+    pinocchio::pinocchio
+    example-robot-data::example-robot-data)
