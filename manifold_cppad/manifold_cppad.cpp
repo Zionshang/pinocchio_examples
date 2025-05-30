@@ -58,7 +58,18 @@ int main(int argc, char const *argv[])
     ////////////// pinocchio计算解析雅可比偏导数 //////////////
     pinocchio::computeRNEADerivatives(model, data, q, v, a);
     Eigen::MatrixXd dtau_dq_pin = data.dtau_dq;
-    Eigen::MatrixXd dtau_dfoot_frame_id1u_dv is correct" << std::endl;
+    Eigen::MatrixXd dtau_dv_pin = data.dtau_dv;
+    data.M.triangularView<Eigen::StrictlyLower>() = data.M.transpose().triangularView<Eigen::StrictlyLower>();
+    Eigen::MatrixXd dtau_da_pin = data.M;
+
+    ////////////// 输出结果对比 //////////////
+    if (dtau_dq.isApprox(dtau_dq_pin, 1e-6))
+        std::cout << "dtau_dq is correct" << std::endl;
+    else
+        std::cout << "dtau_dq is wrong" << std::endl;
+
+    if (dtau_dv.isApprox(dtau_dv_pin, 1e-6))
+        std::cout << "dtau_dv is correct" << std::endl;
     else
         std::cout << "dtau_dv is wrong" << std::endl;
 
