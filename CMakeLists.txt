@@ -23,3 +23,8 @@ add_executable(print_frame_information print_frame_information/print_frame_infor
 target_link_libraries(print_frame_information
     pinocchio::pinocchio
     example-robot-data::example-robot-data)
+
+add_executable(semi_impl_euler semi_impl_euler/semi_impl_euler.cpp)
+target_link_libraries(semi_impl_euler
+    pinocchio::pinocchio
+    example-robot-data::example-robot-data)
