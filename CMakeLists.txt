@@ -23,3 +23,8 @@ add_executable(print_frame_information print_frame_information/print_frame_infor
 target_link_libraries(print_frame_information
     pinocchio::pinocchio
     example-robot-data::example-robot-data)
+
+add_executable(frame_kinematics_hessian frame_kinematics_hessian/frame_kinematics_hessian.cpp)
+target_link_libraries(frame_kinematics_hessian
+    pinocchio::pinocchio
+    example-robot-data::example-robot-data)
