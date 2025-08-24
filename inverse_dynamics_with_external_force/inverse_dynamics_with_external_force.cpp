@@ -12,20 +12,19 @@
 
 using namespace std;
 
-using Vec3 = Eigen::Matrix<double, 3, 1>;
 using VecNq = Eigen::Matrix<double, 19, 1>;
 using VecNv = Eigen::Matrix<double, 18, 1>;
 
 class PinocchioDynamics
 {
 public:
-    PinocchioDynamics(string urdf_filename);
+    PinocchioDynamics(string urdf_filename, vector<string> foot_names);
 
     void PrintModelTree();
     VecNv InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
-                                const VecNv &a, const vector<Vec3> &f_ext);
-    VecNv forwardDynamicsByEom(const VecNq &q, const VecNv &v,
-                               const VecNv &tau, const vector<Vec3> &f_ext);
+                                const VecNv &a, const vector<Eigen::Vector3d> &f_ext);
+    VecNv InverseDynamicsByEom(const VecNq &q, const VecNv &v,
+                               const VecNv &a, const vector<Eigen::Vector3d> &f_ext);
 
     const int GetNq() const { return nq_; }
     const int GetNv() const { return nv_; }
@@ -35,25 +34,22 @@ private:
     pinocchio::Data data_;
 
     int nq_, nv_;
-    int id_feet_[4];
-    int id_joint_[4];
+    std::vector<pinocchio::FrameIndex> id_feet_;
+    std::vector<pinocchio::JointIndex> id_joint_;
 };
 
-PinocchioDynamics::PinocchioDynamics(string urdf_filename)
+PinocchioDynamics::PinocchioDynamics(string urdf_filename, vector<string> foot_names)
 {
-    pinocchio::urdf::buildModel(urdf_filename, model_);
+    pinocchio::urdf::buildModel(urdf_filename, pinocchio::JointModelFreeFlyer(), model_);
     data_ = pinocchio::Data(model_);
     nq_ = model_.nq;
     nv_ = model_.nv;
 
-    vector<string> foot_names = {"LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"};
-    vector<string> foot_parent_joint_names = {"thigh_fl_to_knee_fl_j", "thigh_fr_to_knee_fr_j",
-                                              "thigh_hl_to_knee_hl_j", "thigh_hr_to_knee_hr_j"};
-
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < foot_names.size(); i++)
     {
-        id_feet_[i] = model_.getFrameId(foot_names[i], pinocchio::BODY);
-        id_joint_[i] = model_.getJointId(foot_parent_joint_names[i]);
+        id_feet_.push_back(model_.getFrameId(foot_names[i]));
+        id_joint_.push_back(model_.frames[id_feet_[i]].parent);
+        std::cout << foot_names[i] << " frame id: " << id_feet_[i] << ", parent joint id: " << id_joint_[i] << std::endl;
     }
 }
 
@@ -72,30 +68,29 @@ void PinocchioDynamics::PrintModelTree()
 }
 
 VecNv PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
-                                               const VecNv &a, const vector<Vec3> &f_ext)
+                                               const VecNv &a, const vector<Eigen::Vector3d> &f_ext)
 {
     pinocchio::forwardKinematics(model_, data_, q);
     pinocchio::updateFramePlacements(model_, data_);
 
-    // transform the foot f_ext from world frame to local frame
-    vector<pinocchio::Force> f_foot_W(4), f_foot_L(4);
-    pinocchio::SE3 X_wf_rotation; // transformation of foot relative to world, but only consider rotation part.
-    for (int i = 0; i < 4; i++)
-    {
-        f_foot_W[i] = pinocchio::Force(f_ext[i], Eigen::Vector3d::Zero());
-        X_wf_rotation.rotation(data_.oMf[id_feet_[i]].rotation());
-        X_wf_rotation.translation(Eigen::Vector3d::Zero());
-        f_foot_L[i] = X_wf_rotation.actInv(f_ext[i]);
-    }
-
     // all joints force, expressed in local frame
     pinocchio::container::aligned_vector<pinocchio::Force> f_joints_L(model_.njoints, pinocchio::Force::Zero());
 
+    // transformation of foot relative to world, but only consider rotation part.
+    pinocchio::SE3 X_wf_rotation = pinocchio::SE3::Identity();
+    // foot force expressed in local_world_aligned frame
+    pinocchio::Force f_foot_LWA = pinocchio::Force::Zero();
+    // foot force expressed in frame local frame
+    pinocchio::Force f_foot_L = pinocchio::Force::Zero();
     for (int i = 0; i < 4; i++)
     {
+        X_wf_rotation.rotation(data_.oMf[id_feet_[i]].rotation());
+        f_foot_LWA.linear(f_ext[i]);
+        f_foot_L = X_wf_rotation.actInv(f_foot_LWA);
+
         // transformation of foot relative to joint
         const pinocchio::SE3 X_jf_ = data_.oMi[id_joint_[i]].inverse() * data_.oMf[id_feet_[i]];
-        f_joints_L[id_joint_[i]] = X_jf_.act(f_foot_L[i]);
+        f_joints_L[id_joint_[i]] = X_jf_.act(f_foot_L);
     }
 
     pinocchio::rnea(model_, data_, q, v, a, f_joints_L);
@@ -103,67 +98,65 @@ VecNv PinocchioDynamics::InverseDynamicsByRnea(const VecNq &q, const VecNv &v,
     return data_.tau;
 }
 
-VecNv PinocchioDynamics::forwardDynamicsByEom(const VecNq &q, const VecNv &v,
-                                              const VecNv &tau, const vector<Vec3> &f_ext)
+VecNv PinocchioDynamics::InverseDynamicsByEom(const VecNq &q, const VecNv &v,
+                                              const VecNv &a, const vector<Eigen::Vector3d> &f_ext)
 {
     // calculate contact jacobian
-    std::vector<Eigen::Matrix<double, 6, 18>> J(4);
+    std::vector<Eigen::MatrixXd> J(4);
     for (int i = 0; i < 4; i++)
     {
-        J[i].setZero();
+        J[i].setZero(6, nv_);
         pinocchio::computeFrameJacobian(model_, data_, q, id_feet_[i], pinocchio::LOCAL_WORLD_ALIGNED, J[i]);
     }
 
     // calculate M and C matrix, such that M * a + C = S * tau + J' * f_ext
-    Eigen::MatrixXd M = Eigen::MatrixXd::Zero(nv_, nv_);
-    Eigen::MatrixXd C = Eigen::MatrixXd::Zero(nv_, 1);
     pinocchio::crba(model_, data_, q);
     pinocchio::nonLinearEffects(model_, data_, q, v);
-    M.triangularView<Eigen::Upper>() = data_.M;
-    M.triangularView<Eigen::Lower>() = M.triangularView<Eigen::Upper>().transpose();
-    C = data_.nle;
+    data_.M.triangularView<Eigen::StrictlyLower>() = data_.M.triangularView<Eigen::StrictlyUpper>().transpose();
 
     // calculate a by a = M.inv (tau - C + J' * f_ext)
-    VecNv a = tau - C;
-    for (int i = 0; i < 4; i++)
-        a += J[i].topRows(3).transpose() * f_ext[i]; // only consider the linear part of jacobian
+    VecNv tau = data_.M * a + data_.nle;
+    for (int i = 0; i < id_feet_.size(); i++)
+        tau -= J[i].topRows<3>().transpose() * f_ext[i]; // only consider the linear part of jacobian
 
-    return M.inverse() * a;
+    return tau;
 }
 
 int main()
 {
-    std::string urdf_filename = "/home/zishang/Cpp_workspace/pinocchio_examples/robot/mini_cheetah_mesh_v2.urdf";
-    PinocchioDynamics pin_dyn(urdf_filename);
+    std::string urdf_filename = EXAMPLE_ROBOT_DATA_MODEL_DIR "/go2_description/urdf/go2.urdf";
+    vector<string> foot_names = {"FL_foot", "FR_foot", "RL_foot", "RR_foot"};
+
+    PinocchioDynamics pin_dyn(urdf_filename, foot_names);
     pin_dyn.PrintModelTree();
 
     int nv = pin_dyn.GetNv();
     VecNq q;
-    q << 0.0, 0.0, 0.29, 0.0, 0.0, 0.0, 1.0,
+    q << 0.0, 0.0, 0.32, 0.0, 0.0, 0.0, 1.0,
         0.0, -0.8, 1.6,
         0.0, -0.8, 1.6,
         0.0, -0.8, 1.6,
         0.0, -0.8, 1.6;
 
-    VecNv v = Eigen::MatrixXd::Random(nv, 1);
-    VecNv a = Eigen::MatrixXd::Random(nv, 1);
+    VecNv v = Eigen::VectorXd::Random(nv);
+    VecNv a = Eigen::VectorXd::Random(nv);
     cout << "a from given:\t" << a.transpose() << std::endl;
 
-    Vec3 fext0(10, -20, 100), fext1(-10, 20, 120), fext2(5, -5, 90), fext3(-10, -10, 120);
-    vector<Vec3> f_ext = {fext0, fext1, fext2, fext3};
+    Eigen::Vector3d fext0(10, -20, 100), fext1(-10, 20, 120), fext2(5, -5, 90), fext3(-10, -10, 120);
+    vector<Eigen::Vector3d> f_ext = {fext0, fext1, fext2, fext3};
 
     auto start = std::chrono::high_resolution_clock::now();
-    VecNv tau = pin_dyn.InverseDynamicsByRnea(q, v, a, f_ext);
+    VecNv tau_rnea = pin_dyn.InverseDynamicsByRnea(q, v, a, f_ext);
     auto end = std::chrono::high_resolution_clock::now();
-    std::cout << "Execution time: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
-    cout << "tau from RNEA:\t" << tau.transpose() << std::endl;
+    std::cout << "InverseDynamicsByRnea Execution time: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
+    cout << "tau from RNEA:\t" << tau_rnea.transpose() << std::endl;
 
     start = std::chrono::high_resolution_clock::now();
-    VecNv a2 = pin_dyn.forwardDynamicsByEom(q, v, tau, f_ext);
+    VecNv tau_eom = pin_dyn.InverseDynamicsByEom(q, v, a, f_ext);
     end = std::chrono::high_resolution_clock::now();
-    std::cout << "Execution time: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
-    cout << "a from EOM:\t" << a2.transpose() << std::endl;
+    std::cout << "InverseDynamicsByEom Execution time: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms" << std::endl;
+    cout << "tau from EOM:\t" << tau_eom.transpose() << std::endl;
 
-    cout << "errors of a:\t" << (a - a2).squaredNorm() << std::endl;
+    cout << "errors of a:\t" << (tau_rnea - tau_eom).squaredNorm() << std::endl;
     return 0;
 }

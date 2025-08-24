@@ -5,7 +5,9 @@ find_package(pinocchio REQUIRED)
 find_package(example-robot-data REQUIRED)
 
 add_executable(inverse_dynamics_with_external_force inverse_dynamics_with_external_force/inverse_dynamics_with_external_force.cpp)
-target_link_libraries(inverse_dynamics_with_external_force pinocchio::pinocchio)
+target_link_libraries(inverse_dynamics_with_external_force
+    pinocchio::pinocchio
+    example-robot-data::example-robot-data)
 
 add_executable(compulate_collision_distance compulate_collision_distance/compulate_collision_distance.cpp)
 target_link_libraries(compulate_collision_distance pinocchio::pinocchio)
@@ -24,12 +26,7 @@ target_link_libraries(print_frame_information
     pinocchio::pinocchio
     example-robot-data::example-robot-data)
 
-<<<<<<< HEAD
 add_executable(frame_kinematics_hessian frame_kinematics_hessian/frame_kinematics_hessian.cpp)
 target_link_libraries(frame_kinematics_hessian
-=======
-add_executable(semi_impl_euler semi_impl_euler/semi_impl_euler.cpp)
-target_link_libraries(semi_impl_euler
->>>>>>> a1cf3ff35be15264122265764c530989b92271b7
     pinocchio::pinocchio
     example-robot-data::example-robot-data)
